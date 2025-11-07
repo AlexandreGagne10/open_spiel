@@ -39,6 +39,29 @@
 
 namespace open_spiel::file {
 
+namespace {
+
+std::string NormalizeDirPath(std::string path) {
+  while (path.size() > 1 &&
+         (path.back() == '/'
+#ifdef _WIN32
+          || path.back() == '\\'
+#endif
+          )) {
+#ifdef _WIN32
+    if (path.size() == 3 && path[1] == ':' &&
+        ((path[0] >= 'A' && path[0] <= 'Z') ||
+         (path[0] >= 'a' && path[0] <= 'z'))) {
+      break;
+    }
+#endif
+    path.pop_back();
+  }
+  return path;
+}
+
+}  // namespace
+
 class File::FileImpl : public std::FILE {};
 
 File::File(const std::string& filename, const std::string& mode) {
@@ -162,6 +185,46 @@ std::string GetEnv(const std::string& key, const std::string& default_value) {
   return ((val != nullptr) ? std::string(val) : default_value);
 }
 
-std::string GetTmpDir() { return GetEnv("TMPDIR", "/tmp"); }
+#ifdef _WIN32
+std::string GetTmpDir() {
+  const char* const env_vars[] = {"TMP", "TEMP", "LOCALAPPDATA"};
+  for (const char* env_var : env_vars) {
+    std::string value = NormalizeDirPath(GetEnv(env_var, ""));
+    if (!value.empty() && IsDirectory(value)) {
+      return value;
+    }
+  }
+
+  char path_buffer[MAX_PATH];
+  DWORD len = GetTempPathA(MAX_PATH, path_buffer);
+  if (len > 0 && len < MAX_PATH) {
+    std::string value(path_buffer, len);
+    value = NormalizeDirPath(value);
+    if (!value.empty() && IsDirectory(value)) {
+      return value;
+    }
+  }
+
+  std::string fallback = NormalizeDirPath(GetEnv("SYSTEMROOT", "."));
+  if (!fallback.empty() && IsDirectory(fallback)) {
+    return fallback;
+  }
+  return ".";
+}
+#else
+std::string GetTmpDir() {
+  std::string tmpdir = NormalizeDirPath(GetEnv("TMPDIR", ""));
+  if (!tmpdir.empty() && IsDirectory(tmpdir)) {
+    return tmpdir;
+  }
+  if (IsDirectory("/tmp")) {
+    return "/tmp";
+  }
+  if (IsDirectory("/var/tmp")) {
+    return "/var/tmp";
+  }
+  return ".";
+}
+#endif
 
 }  // namespace open_spiel::file

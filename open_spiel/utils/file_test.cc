@@ -20,6 +20,10 @@
 #include <string>
 #include <utility>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 
 #include "open_spiel/abseil-cpp/absl/random/distributions.h"
 #include "open_spiel/spiel_utils.h"
@@ -105,9 +109,93 @@ void TestFile() {
   SPIEL_CHECK_FALSE(Exists(dir));
 }
 
+#ifdef _WIN32
+std::string NormalizeDirPathForTest(std::string path) {
+  while (path.size() > 1 &&
+         (path.back() == '\\' || path.back() == '/')) {
+    if (path.size() == 3 && path[1] == ':' &&
+        ((path[0] >= 'A' && path[0] <= 'Z') ||
+         (path[0] >= 'a' && path[0] <= 'z'))) {
+      break;
+    }
+    path.pop_back();
+  }
+  return path;
+}
+
+struct EnvRestorer {
+  EnvRestorer(std::string tmp_value, std::string temp_value,
+              std::string localappdata_value)
+      : tmp(std::move(tmp_value)),
+        temp(std::move(temp_value)),
+        localappdata(std::move(localappdata_value)) {}
+  ~EnvRestorer() {
+    _putenv_s("TMP", tmp.c_str());
+    _putenv_s("TEMP", temp.c_str());
+    _putenv_s("LOCALAPPDATA", localappdata.c_str());
+  }
+  std::string tmp;
+  std::string temp;
+  std::string localappdata;
+};
+
+void TestWindowsTmpDirResolution() {
+  std::mt19937 rng(std::time(nullptr));
+  std::string unique =
+      std::to_string(absl::Uniform<int>(rng, 0, kMaxRandomVal));
+  std::string base_tmp = file::GetTmpDir();
+
+  std::string tmp_dir_1 = base_tmp + "/open_spiel-test-win-tmp-1-" + unique;
+  std::string tmp_dir_2 = base_tmp + "/open_spiel-test-win-tmp-2-" + unique;
+  std::string tmp_dir_3 = base_tmp + "/open_spiel-test-win-tmp-3-" + unique;
+
+  if (Exists(tmp_dir_1)) {
+    SPIEL_CHECK_TRUE(Remove(tmp_dir_1));
+  }
+  SPIEL_CHECK_TRUE(Mkdir(tmp_dir_1));
+  if (Exists(tmp_dir_2)) {
+    SPIEL_CHECK_TRUE(Remove(tmp_dir_2));
+  }
+  SPIEL_CHECK_TRUE(Mkdir(tmp_dir_2));
+  if (Exists(tmp_dir_3)) {
+    SPIEL_CHECK_TRUE(Remove(tmp_dir_3));
+  }
+  SPIEL_CHECK_TRUE(Mkdir(tmp_dir_3));
+
+  EnvRestorer restore_env(GetEnv("TMP", ""), GetEnv("TEMP", ""),
+                          GetEnv("LOCALAPPDATA", ""));
+
+  _putenv_s("TMP", tmp_dir_1.c_str());
+  _putenv_s("TEMP", tmp_dir_2.c_str());
+  _putenv_s("LOCALAPPDATA", tmp_dir_3.c_str());
+  SPIEL_CHECK_EQ(file::GetTmpDir(), tmp_dir_1);
+
+  _putenv_s("TMP", "");
+  SPIEL_CHECK_EQ(file::GetTmpDir(), tmp_dir_2);
+
+  _putenv_s("TEMP", "");
+  SPIEL_CHECK_EQ(file::GetTmpDir(), tmp_dir_3);
+
+  _putenv_s("LOCALAPPDATA", "");
+  char buffer[MAX_PATH];
+  DWORD length = GetTempPathA(MAX_PATH, buffer);
+  SPIEL_CHECK_GT(length, 0);
+  std::string expected(buffer, length);
+  expected = NormalizeDirPathForTest(expected);
+  SPIEL_CHECK_EQ(file::GetTmpDir(), expected);
+
+  SPIEL_CHECK_TRUE(Remove(tmp_dir_1));
+  SPIEL_CHECK_TRUE(Remove(tmp_dir_2));
+  SPIEL_CHECK_TRUE(Remove(tmp_dir_3));
+}
+#endif
+
 }  // namespace
 }  // namespace open_spiel::file
 
 int main(int argc, char** argv) {
   open_spiel::file::TestFile();
+#ifdef _WIN32
+  open_spiel::file::TestWindowsTmpDirResolution();
+#endif
 }
