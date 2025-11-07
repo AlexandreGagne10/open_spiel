@@ -33,13 +33,60 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <string>
+#include <system_error>
 
 #include "open_spiel/spiel_utils.h"
 
 namespace open_spiel::file {
 
 class File::FileImpl : public std::FILE {};
+
+namespace internal {
+
+namespace {
+
+// Returns the index at which recursive directory creation should begin for the
+// supplied Windows path. This ignores drive letter prefixes (e.g. `C:`) and UNC
+// share prefixes (e.g. `\\server\\share`). For non-Windows platforms the
+// prefix length is always 0.
+size_t WindowsRootPrefixLengthImpl(const std::string& path) {
+#ifdef _WIN32
+  if (path.size() > 1 && path[1] == ':') {
+    // Skip the drive letter and optional separator (e.g. "C:" or "C:\").
+    size_t prefix = 2;
+    if (path.size() > 2 && (path[2] == '\\' || path[2] == '/')) {
+      ++prefix;
+    }
+    return prefix;
+  }
+
+  if (path.size() > 1 && path[0] == '\\' && path[1] == '\\') {
+    // Skip the server component.
+    size_t pos = path.find_first_of("\\/", 2);
+    if (pos == std::string::npos) {
+      return path.size();
+    }
+    // Skip the share component if present.
+    pos = path.find_first_of("\\/", pos + 1);
+    if (pos == std::string::npos) {
+      return path.size();
+    }
+    return pos;
+  }
+#endif
+  (void)path;
+  return 0;
+}
+
+}  // namespace
+
+size_t WindowsRootPrefixLength(const std::string& path) {
+  return WindowsRootPrefixLengthImpl(path);
+}
+
+}  // namespace internal
 
 File::File(const std::string& filename, const std::string& mode) {
   fd_.reset(static_cast<FileImpl*>(std::fopen(filename.c_str(), mode.c_str())));
@@ -130,11 +177,36 @@ bool Mkdir(const std::string& path, int mode) {
 }
 
 bool Mkdirs(const std::string& path, int mode) {
+  if (path.empty()) {
+    return false;
+  }
+
+  std::error_code ec;
+  std::filesystem::path fs_path(path);
+  if (std::filesystem::create_directories(fs_path, ec)) {
+#ifndef _WIN32
+    // Best effort to apply the requested permissions on POSIX platforms.
+    chmod(path.c_str(), mode);
+#endif
+    return true;
+  }
+
+  if (!ec && std::filesystem::exists(fs_path)) {
+    return std::filesystem::is_directory(fs_path);
+  }
+
+  // Fall back to the manual implementation for platforms or situations where
+  // std::filesystem fails (e.g. due to missing support or specific error
+  // codes). This retains the previous behaviour and allows us to honour the
+  // requested mode.
   struct stat info;
-  size_t pos = 0;
+  size_t pos = internal::WindowsRootPrefixLength(path);
   while (pos != std::string::npos) {
     pos = path.find_first_of("\\/", pos + 1);
     std::string sub_path = path.substr(0, pos);
+    if (sub_path.empty()) {
+      continue;
+    }
     if (stat(sub_path.c_str(), &info) == 0) {
       if (info.st_mode & S_IFDIR) {
         continue;  // directory already exists

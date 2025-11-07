@@ -74,6 +74,13 @@ std::string RealPath(const std::string& path);  // Get the canonical file path.
 std::string GetEnv(const std::string& key, const std::string& default_value);
 std::string GetTmpDir();
 
+namespace internal {
+// Exposed for testing: returns the length of the Windows-specific root prefix
+// (drive letter or UNC share) that should be skipped before recursively
+// creating directories.
+size_t WindowsRootPrefixLength(const std::string& path);
+}  // namespace internal
+
 }  // namespace open_spiel::file
 
 #endif  // OPEN_SPIEL_UTILS_FILE_H_
