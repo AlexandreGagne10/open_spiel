@@ -205,9 +205,8 @@ std::string GetTmpDir() {
     }
   }
 
-  std::string fallback = NormalizeDirPath(GetEnv("SYSTEMROOT", "."));
-  if (!fallback.empty() && IsDirectory(fallback)) {
-    return fallback;
+  if (IsDirectory(".")) {
+    return NormalizeDirPath(".");
   }
   return ".";
 }
@@ -222,6 +221,9 @@ std::string GetTmpDir() {
   }
   if (IsDirectory("/var/tmp")) {
     return "/var/tmp";
+  }
+  if (IsDirectory(".")) {
+    return NormalizeDirPath(".");
   }
   return ".";
 }

@@ -188,6 +188,60 @@ void TestWindowsTmpDirResolution() {
   SPIEL_CHECK_TRUE(Remove(tmp_dir_2));
   SPIEL_CHECK_TRUE(Remove(tmp_dir_3));
 }
+#else
+struct PosixTmpdirRestorer {
+  PosixTmpdirRestorer() {
+    const char* value = std::getenv("TMPDIR");
+    if (value != nullptr) {
+      had_value = true;
+      original = value;
+    }
+  }
+  ~PosixTmpdirRestorer() {
+    if (had_value) {
+      setenv("TMPDIR", original.c_str(), 1);
+    } else {
+      unsetenv("TMPDIR");
+    }
+  }
+  bool had_value = false;
+  std::string original;
+};
+
+void TestPosixTmpDirResolution() {
+  PosixTmpdirRestorer restore_env;
+  setenv("TMPDIR", "/path/that/should/not/exist", 1);
+
+  std::string fallback = file::GetTmpDir();
+  if (IsDirectory("/tmp")) {
+    SPIEL_CHECK_EQ(fallback, "/tmp");
+  } else if (IsDirectory("/var/tmp")) {
+    SPIEL_CHECK_EQ(fallback, "/var/tmp");
+  } else {
+    SPIEL_CHECK_EQ(fallback, ".");
+  }
+
+  std::mt19937 rng(std::time(nullptr));
+  std::string unique =
+      std::to_string(absl::Uniform<int>(rng, 0, kMaxRandomVal));
+
+  std::string base_dir = fallback;
+  if (!IsDirectory(base_dir)) {
+    base_dir = file::GetTmpDir();
+  }
+  if (!IsDirectory(base_dir)) {
+    base_dir = ".";
+  }
+
+  std::string custom = base_dir + "/open_spiel-test-posix-tmp-" + unique;
+  if (Exists(custom)) {
+    SPIEL_CHECK_TRUE(Remove(custom));
+  }
+  SPIEL_CHECK_TRUE(Mkdir(custom));
+  setenv("TMPDIR", (custom + "/").c_str(), 1);
+  SPIEL_CHECK_EQ(file::GetTmpDir(), custom);
+  SPIEL_CHECK_TRUE(Remove(custom));
+}
 #endif
 
 }  // namespace
@@ -197,5 +251,7 @@ int main(int argc, char** argv) {
   open_spiel::file::TestFile();
 #ifdef _WIN32
   open_spiel::file::TestWindowsTmpDirResolution();
+#else
+  open_spiel::file::TestPosixTmpDirResolution();
 #endif
 }
