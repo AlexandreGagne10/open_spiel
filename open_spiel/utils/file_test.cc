@@ -105,9 +105,44 @@ void TestFile() {
   SPIEL_CHECK_FALSE(Exists(dir));
 }
 
+void TestWindowsPrefixes() {
+  const std::string drive_path = "C:\\temp\\foo\\bar";
+  const std::string unc_path = "\\\\serveur\\partage\\dir";
+
+#ifdef _WIN32
+  SPIEL_CHECK_EQ(internal::WindowsRootPrefixLength(drive_path), 3);
+  SPIEL_CHECK_EQ(internal::WindowsRootPrefixLength(unc_path), 17);
+#else
+  SPIEL_CHECK_EQ(internal::WindowsRootPrefixLength(drive_path), 0);
+  SPIEL_CHECK_EQ(internal::WindowsRootPrefixLength(unc_path), 0);
+#endif
+}
+
+#ifdef _WIN32
+void TestWindowsMkdirs() {
+  std::mt19937 rng(std::time(nullptr));
+  std::string val = std::to_string(absl::Uniform<int>(rng, 0, kMaxRandomVal));
+  std::string base = file::GetEnv("TEMP", "C:\\temp");
+  if (base.back() == '\\' || base.back() == '/') {
+    base.pop_back();
+  }
+
+  std::string drive_path = base + "\\open_spiel-test-" + val + "\\foo\\bar";
+  SPIEL_CHECK_TRUE(file::Mkdirs(drive_path));
+  SPIEL_CHECK_TRUE(file::IsDirectory(drive_path));
+  SPIEL_CHECK_TRUE(file::Remove(drive_path));
+  SPIEL_CHECK_TRUE(file::Remove(base + "\\open_spiel-test-" + val + "\\foo"));
+  SPIEL_CHECK_TRUE(file::Remove(base + "\\open_spiel-test-" + val));
+}
+#endif
+
 }  // namespace
 }  // namespace open_spiel::file
 
 int main(int argc, char** argv) {
   open_spiel::file::TestFile();
+  open_spiel::file::TestWindowsPrefixes();
+#ifdef _WIN32
+  open_spiel::file::TestWindowsMkdirs();
+#endif
 }
