@@ -18,6 +18,7 @@ See https://setuptools.readthedocs.io/en/latest/setuptools.html
 """
 
 import os
+import shutil
 import subprocess
 import sys
 
@@ -59,32 +60,44 @@ class BuildExt(build_ext):
           f"the following extensions: {ext_names}") from e
     print("Found CMake")
 
-    cxx = "clang++"
-    if os.environ.get("CXX") is not None:
-      cxx = os.environ.get("CXX")
+    cxx = self._select_cxx()
+    if cxx is None:
+      ext_names = ", ".join(ext.name for ext in self.extensions)
+      raise RuntimeError(
+          "No compatible C++ compiler was detected to build the "
+          f"following extensions: {ext_names}."
+          " On Windows, ensure that cl.exe or clang-cl.exe is available in a "
+          "Developer Command Prompt or set the CXX environment variable."
+      )
     try:
-      subprocess.check_call([cxx, "--version"])
-    except OSError as e:
-      ext_names = ", ".join(e.name for e in self.extensions)
+      self._check_compiler_version(cxx)
+    except (OSError, subprocess.CalledProcessError) as e:
+      ext_names = ", ".join(ext.name for ext in self.extensions)
       raise RuntimeError(
           "A C++ compiler that supports c++17 must be installed to build the "
           + "following extensions: {}".format(ext_names)
-          + ". We recommend: Clang version >= 7.0.0."
+          + ". We recommend: Clang version >= 7.0.0 or Microsoft Visual Studio "
+          + "Build Tools."
       ) from e
     print("Found C++ compiler: {}".format(cxx))
+    self._resolved_cxx = cxx
 
   def build_extension(self, ext):
     extension_dir = os.path.abspath(
         os.path.dirname(self.get_ext_fullpath(ext.name)))
-    cxx = "clang++"
-    if os.environ.get("CXX") is not None:
-      cxx = os.environ.get("CXX")
+    cxx = self._select_cxx()
     env = os.environ.copy()
     cmake_args = [
         f"-DPython3_EXECUTABLE={sys.executable}",
-        f"-DCMAKE_CXX_COMPILER={cxx}",
         f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extension_dir}",
     ]
+    if cxx is not None:
+      cmake_args.append(f"-DCMAKE_CXX_COMPILER={cxx}")
+    cfg = "Debug" if self.debug else "Release"
+    if not sys.platform.startswith("win"):
+      cmake_args.append(f"-DCMAKE_BUILD_TYPE={cfg}")
+    if "CMAKE_BUILD_PARALLEL_LEVEL" not in env:
+      env["CMAKE_BUILD_PARALLEL_LEVEL"] = str(os.cpu_count())
     if not os.path.exists(self.build_temp):
       os.makedirs(self.build_temp)
     subprocess.check_call(
@@ -92,9 +105,35 @@ class BuildExt(build_ext):
         env=env)
 
     # Build only pyspiel (for pip package)
-    subprocess.check_call(["make", "pyspiel", f"-j{os.cpu_count()}"],
-                          cwd=self.build_temp,
-                          env=env)
+    build_cmd = [
+        "cmake", "--build", ".", "--target", "pyspiel", "--config", cfg
+    ]
+    subprocess.check_call(build_cmd, cwd=self.build_temp, env=env)
+
+  def _select_cxx(self):
+    if os.environ.get("CXX"):
+      return os.environ.get("CXX")
+    if hasattr(self, "_resolved_cxx"):
+      return self._resolved_cxx
+    return self._resolve_default_compiler()
+
+  def _resolve_default_compiler(self):
+    if sys.platform.startswith("win"):
+      for candidate in ("clang-cl", "cl"):
+        if shutil.which(candidate):
+          return candidate
+      return None
+    return "clang++"
+
+  def _check_compiler_version(self, cxx):
+    if self._is_msvc(cxx):
+      subprocess.check_call([cxx, "/?"])
+    else:
+      subprocess.check_call([cxx, "--version"])
+
+  def _is_msvc(self, cxx):
+    compiler = os.path.basename(cxx).lower()
+    return compiler in ("cl", "cl.exe")
 
 
 def _get_requirements(requirements_file):  # pylint: disable=g-doc-args
